@@ -1,0 +1,24 @@
+name: C11 Build & Test CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y gcc make
+
+      - name: Compile and run test suite with strict flags (-Werror)
+        run: make test
+
+      - name: Run dynamic simulation executable
+        run: make run
