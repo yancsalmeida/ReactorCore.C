@@ -3,6 +3,7 @@
 *.obj
 *.exe
 *.out
+*.so
 bin/
 build/
 reactor_core
