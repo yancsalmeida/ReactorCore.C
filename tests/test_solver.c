@@ -1,8 +1,10 @@
 #include "vector.h"
 #include "rk4.h"
 #include "cstr.h"
+#include "reactor_ffi.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <assert.h>
 
@@ -178,6 +180,41 @@ static void test_cstr_steady_state_and_runaway(void) {
     rk4_workspace_free(ws);
 }
 
+static void test_reactor_ffi_interface(void) {
+    printf("Running test_reactor_ffi_interface...\n");
+
+    const char *ver = reactor_core_version();
+    TEST_ASSERT(ver != NULL && strstr(ver, "ReactorCore.C") != NULL, "Version string returned");
+
+    CstrParamsFFI params;
+    int rc = reactor_cstr_default_params(&params);
+    TEST_ASSERT(rc == 0, "Default parameters populated");
+    TEST_ASSERT(params.ca_feed_mol_per_l == 1.0, "Feed concentration is 1.0");
+
+    double ca = 1.0;
+    double temp = 350.0;
+    rc = reactor_cstr_step_rk4(&params, &ca, &temp, 0.005);
+    TEST_ASSERT(rc == 0, "Single RK4 step succeeds");
+    TEST_ASSERT(ca < 1.0, "Concentration decreases after reaction");
+    TEST_ASSERT(temp > 350.0, "Temperature increases due to exothermicity");
+
+    CstrStateFFI detailed;
+    rc = reactor_cstr_step_detailed(&params, &ca, &temp, 0.005, 400.0, &detailed);
+    TEST_ASSERT(rc == 0, "Detailed step succeeds");
+    TEST_ASSERT(detailed.conversion_pct > 0.0, "Conversion percentage calculated");
+    TEST_ASSERT(!detailed.is_runaway, "Initial operating point is not runaway");
+
+    /* Batch trajectory test */
+    const size_t n_steps = 100;
+    double times[101];
+    double ca_arr[101];
+    double temp_arr[101];
+    rc = reactor_cstr_simulate_trajectory(&params, 1.0, 350.0, 0.005, n_steps, times, ca_arr, temp_arr);
+    TEST_ASSERT(rc == 0, "Batch trajectory simulation succeeds");
+    TEST_ASSERT(fabs(times[100] - 0.5) < 1e-6, "Final trajectory time matches dt * n_steps");
+    TEST_ASSERT(ca_arr[100] < ca_arr[0], "Concentration drops along trajectory");
+}
+
 int main(void) {
     printf("=========================================\n");
     printf("   ReactorCore.C Test Suite (C11)        \n");
@@ -187,6 +224,7 @@ int main(void) {
     test_rk4_analytical_decay();
     test_rk4_harmonic_oscillator_energy();
     test_cstr_steady_state_and_runaway();
+    test_reactor_ffi_interface();
 
     printf("=========================================\n");
     printf("Summary: %d passed, %d failed\n", g_tests_passed, g_tests_failed);

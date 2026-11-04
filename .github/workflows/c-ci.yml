@@ -17,8 +17,10 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y gcc make
 
-      - name: Compile and run test suite with strict flags (-Werror)
-        run: make test
+      - name: Compile shared library and test suite with strict flags (-Werror)
+        run: |
+          make test
+          make lib
 
       - name: Run dynamic simulation executable
         run: make run
