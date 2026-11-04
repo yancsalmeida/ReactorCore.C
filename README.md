@@ -1,7 +1,7 @@
 # ReactorCore.C — High-Performance Chemical Reactor Dynamics & ODE Solver
 
 [![C11](https://img.shields.io/badge/Language-C11%20(%60gcc%60)-00599C?logo=c)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Build & Tests](https://img.shields.io/badge/Tests-15%20Passed%20(100%25)-2ea44f)](#-running-tests--simulation)
+[![Build & Tests](https://img.shields.io/badge/Tests-15%20Passed%20(100%25)-2ea44f)](#automated-testing)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **ReactorCore.C** is a high-performance, modular numerical simulation engine built in **C11 (`gcc`)** with zero external library dependencies.
@@ -12,7 +12,7 @@ It models the coupled, non-linear dynamic behavior of an **exothermic Continuous
 
 ---
 
-## 🏗️ Architecture & Systems Programming Highlights
+## Architecture & Systems Programming Highlights
 
 Designed with rigorous low-level systems programming principles:
 
@@ -53,7 +53,7 @@ Any arbitrary system of first-order differential equations (biological networks,
 
 ---
 
-## 🧪 Mathematical & Chemical Engineering Model
+## Mathematical & Chemical Engineering Model
 
 The system models an irreversible, exothermic liquid-phase reaction $A \to B$ in a CSTR with jacket cooling:
 
@@ -71,17 +71,28 @@ Because heat generation is exponential in temperature ($\sim e^{-E_a/RT}$) while
 
 ---
 
-## 🚀 Running Tests & Simulation
+## Quickstart & Execution
 
 ### 1. Prerequisites
 * GCC (`gcc`) supporting C11
 * GNU Make (`make`)
 
-### 2. Run Automated Test Suite
+### 2. Run Dynamic Simulation Executable
+Compiles and runs the CLI, logging real-time telemetry and exporting `cstr_simulation.csv`:
+```bash
+make run
+```
+
+---
+
+## Automated Testing
+
 Validates dynamic vector operations, analytical decay order of accuracy ($O(\Delta t^4)$), harmonic oscillator energy conservation, and CSTR thermal runaway thresholds:
+
 ```bash
 make test
 ```
+
 ```text
 =========================================
 Running Automated Unit Tests...
@@ -99,16 +110,10 @@ Summary: 15 passed, 0 failed
 =========================================
 ```
 
-### 3. Run Dynamic Simulation Executable
-Compiles and runs the CLI, logging real-time telemetry and exporting `cstr_simulation.csv`:
-```bash
-make run
-```
-
 ---
 
-## 👤 Author
+## Author
 
-**Yan Almeida**  
-BSc in Chemical Engineering (*Budapest University of Technology and Economics — BME*) · Software Development (*ISPGAYA — Porto, Portugal*)  
-[LinkedIn](https://www.linkedin.com/in/yan-almeida-66940a381/) · [GitHub](https://github.com/yancsalmeida)
+**Yan Almeida**
+- LinkedIn: [linkedin.com/in/yancsa](https://www.linkedin.com/in/yancsa/)
+- GitHub: [github.com/yancsalmeida](https://github.com/yancsalmeida)
