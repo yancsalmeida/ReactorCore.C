@@ -66,13 +66,29 @@ void vector_fill(Vector *vec, double value) {
     }
 }
 
+#include "simd_math.h"
+
 bool vector_saxpy(Vector *y, double alpha, const Vector *x) {
     if (!y || !x || !y->data || !x->data || y->size != x->size) {
         return false;
     }
 
+#if REACTOR_CORE_HAS_AVX2
+    __m256d valpha = _mm256_set1_pd(alpha);
+    size_t i = 0;
+    for (; i + 4 <= y->size; i += 4) {
+        __m256d vy = _mm256_loadu_pd(&y->data[i]);
+        __m256d vx = _mm256_loadu_pd(&x->data[i]);
+        vy = _mm256_fmadd_pd(valpha, vx, vy);
+        _mm256_storeu_pd(&y->data[i], vy);
+    }
+    for (; i < y->size; i++) {
+        y->data[i] += alpha * x->data[i];
+    }
+#else
     for (size_t i = 0; i < y->size; i++) {
         y->data[i] += alpha * x->data[i];
     }
+#endif
     return true;
 }

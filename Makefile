@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c11 -Wall -Wextra -Werror -pedantic -Iinclude -O3 -fPIC
+CFLAGS = -std=c11 -Wall -Wextra -Werror -pedantic -mavx2 -mfma -Iinclude -O3 -fPIC
 LDFLAGS = -lm
 
 SRC_DIR = src

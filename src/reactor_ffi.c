@@ -347,3 +347,105 @@ int reactor_cstr_simulate_adaptive_trajectory(
     vector_free(y);
     return 0;
 }
+
+#include "simd_math.h"
+
+int reactor_core_has_simd(void) {
+    return simd_avx2_fma_available();
+}
+
+int reactor_cstr_batch_step_rk4(
+    const CstrParamsFFI *params,
+    double *ca_array,
+    double *temp_array,
+    size_t n_reactors,
+    double dt
+) {
+    if (!params || !ca_array || !temp_array || n_reactors == 0 || dt <= 0.0) {
+        return -1;
+    }
+
+    bool ok = cstr_batch_step_rk4(
+        n_reactors,
+        (const CstrParameters*)params,
+        ca_array,
+        temp_array,
+        dt
+    );
+
+    return ok ? 0 : -1;
+}
+
+int reactor_cstr_batch_step_detailed(
+    const CstrParamsFFI *params,
+    double *ca_array,
+    double *temp_array,
+    size_t n_reactors,
+    double dt,
+    double runaway_threshold_k,
+    CstrStateFFI *out_states
+) {
+    if (!params || !ca_array || !temp_array || !out_states || n_reactors == 0 || dt <= 0.0) {
+        return -1;
+    }
+
+    bool ok = cstr_batch_step_rk4(
+        n_reactors,
+        (const CstrParameters*)params,
+        ca_array,
+        temp_array,
+        dt
+    );
+    if (!ok) return -1;
+
+    const CstrParameters *p = (const CstrParameters*)params;
+    for (size_t i = 0; i < n_reactors; i++) {
+        double ca = ca_array[i];
+        double temp = temp_array[i];
+        double r = cstr_reaction_rate(p, ca, temp);
+        double conversion = 0.0;
+        if (p->ca_feed_mol_per_l > 1e-12) {
+            conversion = ((p->ca_feed_mol_per_l - ca) / p->ca_feed_mol_per_l) * 100.0;
+            if (conversion < 0.0) conversion = 0.0;
+            if (conversion > 100.0) conversion = 100.0;
+        }
+
+        out_states[i].ca_mol_per_l = ca;
+        out_states[i].temp_kelvin = temp;
+        out_states[i].conversion_pct = conversion;
+        out_states[i].reaction_rate_mol_per_l_min = r;
+        out_states[i].is_runaway = (temp >= runaway_threshold_k);
+    }
+
+    return 0;
+}
+
+int reactor_cstr_batch_simulate_trajectory(
+    const CstrParamsFFI *params,
+    const double *ca0_array,
+    const double *temp0_array,
+    size_t n_reactors,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_temp
+) {
+    if (!params || !ca0_array || !temp0_array || !out_ca || !out_temp || n_reactors == 0 || dt <= 0.0) {
+        return -1;
+    }
+
+    bool ok = cstr_batch_simulate_trajectory(
+        n_reactors,
+        (const CstrParameters*)params,
+        ca0_array,
+        temp0_array,
+        dt,
+        steps,
+        out_time,
+        out_ca,
+        out_temp
+    );
+
+    return ok ? 0 : -1;
+}

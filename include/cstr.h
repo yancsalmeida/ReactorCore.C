@@ -53,4 +53,112 @@ void cstr_derivatives(double t, const Vector *y, Vector *dydt, void *params);
  */
 bool cstr_is_thermal_runaway(const Vector *y, double max_safe_temp_kelvin);
 
+/**
+ * @brief Pre-allocated workspace for batch / ensemble multi-reactor RK4 simulation.
+ * Avoids any heap allocation in the time integration loop.
+ */
+typedef struct {
+    size_t capacity;
+    double *k1_ca;
+    double *k1_temp;
+    double *k2_ca;
+    double *k2_temp;
+    double *k3_ca;
+    double *k3_temp;
+    double *k4_ca;
+    double *k4_temp;
+    double *temp_ca;
+    double *temp_temp;
+} CstrBatchWorkspace;
+
+/**
+ * @brief Allocates scratchpad buffers for a batch of up to capacity reactors.
+ */
+CstrBatchWorkspace* cstr_batch_workspace_create(size_t capacity);
+
+/**
+ * @brief Frees the batch workspace struct and its scratchpad buffers.
+ */
+void cstr_batch_workspace_free(CstrBatchWorkspace *ws);
+
+/**
+ * @brief Evaluates coupled non-linear CSTR derivatives across an ensemble of N reactors:
+ *   dCa/dt = (q/V) * (CA0 - Ca) - r
+ *   dT/dt  = (q/V) * (T0 - T) + (-dH / (rho*Cp)) * r - (UA / (V*rho*Cp)) * (T - Tc)
+ * where r = k0 * exp(-Ea / (R*T)) * Ca.
+ *
+ * Parallelized with AVX2 256-bit SIMD and FMA instructions (4 double-precision reactors per instruction),
+ * with automatic scalar remainder handling.
+ *
+ * @param n Number of reactors.
+ * @param params Common CSTR physical parameters.
+ * @param ca Array of reactant concentrations [n].
+ * @param temp Array of temperatures [n].
+ * @param out_dcadt Array for computed dCa/dt [n].
+ * @param out_dtdt Array for computed dT/dt [n].
+ */
+void cstr_batch_derivatives(
+    size_t n,
+    const CstrParameters *params,
+    const double *ca,
+    const double *temp,
+    double *out_dcadt,
+    double *out_dtdt
+);
+
+/**
+ * @brief Advances an ensemble of N CSTR reactors by a single RK4 step using pre-allocated workspace.
+ * Parallelized via AVX2 and FMA across all 4 Runge-Kutta stages.
+ */
+bool cstr_batch_step_rk4_ws(
+    CstrBatchWorkspace *ws,
+    size_t n,
+    const CstrParameters *params,
+    double *ca,
+    double *temp,
+    double dt
+);
+
+/**
+ * @brief Advances an ensemble of N CSTR reactors by a single RK4 step.
+ * Uses stack memory for N <= 64 or internal workspace for larger N.
+ */
+bool cstr_batch_step_rk4(
+    size_t n,
+    const CstrParameters *params,
+    double *ca,
+    double *temp,
+    double dt
+);
+
+/**
+ * @brief Simulates dynamic trajectories for an ensemble of N reactors over multiple RK4 steps.
+ * Outputs ca and temp at all time steps for all reactors.
+ * Output memory layouts:
+ *   out_ca[step * n + reactor_idx]
+ *   out_temp[step * n + reactor_idx]
+ *
+ * @param n Number of reactors.
+ * @param params CSTR parameters.
+ * @param ca0 Initial concentrations [n].
+ * @param temp0 Initial temperatures [n].
+ * @param dt Step size (min).
+ * @param steps Number of integration steps.
+ * @param out_time Optional array of size (steps + 1) for time points (can be NULL).
+ * @param out_ca Pre-allocated array of size (steps + 1) * n.
+ * @param out_temp Pre-allocated array of size (steps + 1) * n.
+ * @return true on success, false on invalid parameters.
+ */
+bool cstr_batch_simulate_trajectory(
+    size_t n,
+    const CstrParameters *params,
+    const double *ca0,
+    const double *temp0,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_temp
+);
+
 #endif /* REACTOR_CORE_CSTR_H */

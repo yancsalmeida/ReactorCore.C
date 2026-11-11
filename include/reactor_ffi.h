@@ -171,6 +171,55 @@ REACTOR_API int reactor_cstr_simulate_adaptive_trajectory(
     CstrAdaptiveStatsFFI *out_stats
 );
 
+/**
+ * Returns 1 if AVX2 and FMA SIMD acceleration is compiled and enabled, 0 otherwise.
+ */
+REACTOR_API int reactor_core_has_simd(void);
+
+/**
+ * Advances an ensemble of N CSTR reactors by a single RK4 step using SIMD AVX2+FMA.
+ * Updates ca_array and temp_array in-place.
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+REACTOR_API int reactor_cstr_batch_step_rk4(
+    const CstrParamsFFI *params,
+    double *ca_array,
+    double *temp_array,
+    size_t n_reactors,
+    double dt
+);
+
+/**
+ * Advances an ensemble of N CSTR reactors and computes detailed telemetry states for each.
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+REACTOR_API int reactor_cstr_batch_step_detailed(
+    const CstrParamsFFI *params,
+    double *ca_array,
+    double *temp_array,
+    size_t n_reactors,
+    double dt,
+    double runaway_threshold_k,
+    CstrStateFFI *out_states
+);
+
+/**
+ * High-speed batch trajectory simulation for an ensemble of N reactors simultaneously using SIMD AVX2+FMA.
+ * Populates out_time (size: steps + 1) and out_ca, out_temp (size: (steps + 1) * n_reactors).
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+REACTOR_API int reactor_cstr_batch_simulate_trajectory(
+    const CstrParamsFFI *params,
+    const double *ca0_array,
+    const double *temp0_array,
+    size_t n_reactors,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_temp
+);
+
 #ifdef __cplusplus
 }
 #endif

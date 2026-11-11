@@ -39,6 +39,8 @@ void rk4_workspace_free(Rk4Workspace *ws) {
     }
 }
 
+#include "simd_math.h"
+
 bool rk4_step(
     Rk4Workspace *ws,
     OdeSystemFunc f,
@@ -59,25 +61,89 @@ bool rk4_step(
     f(t, y, ws->k1, params);
 
     /* Stage 2: y_temp = y + 0.5 * dt * k1; k2 = f(t + 0.5*dt, y_temp) */
+#if REACTOR_CORE_HAS_AVX2
+    __m256d vhalf_dt = _mm256_set1_pd(half_dt);
+    size_t i = 0;
+    for (; i + 4 <= dim; i += 4) {
+        __m256d vy = _mm256_loadu_pd(&y->data[i]);
+        __m256d vk1 = _mm256_loadu_pd(&ws->k1->data[i]);
+        _mm256_storeu_pd(&ws->ytemp->data[i], _mm256_fmadd_pd(vhalf_dt, vk1, vy));
+    }
+    for (; i < dim; i++) {
+        ws->ytemp->data[i] = y->data[i] + half_dt * ws->k1->data[i];
+    }
+#else
     for (size_t i = 0; i < dim; i++) {
         ws->ytemp->data[i] = y->data[i] + half_dt * ws->k1->data[i];
     }
+#endif
     f(t + half_dt, ws->ytemp, ws->k2, params);
 
     /* Stage 3: y_temp = y + 0.5 * dt * k2; k3 = f(t + 0.5*dt, y_temp) */
+#if REACTOR_CORE_HAS_AVX2
+    i = 0;
+    for (; i + 4 <= dim; i += 4) {
+        __m256d vy = _mm256_loadu_pd(&y->data[i]);
+        __m256d vk2 = _mm256_loadu_pd(&ws->k2->data[i]);
+        _mm256_storeu_pd(&ws->ytemp->data[i], _mm256_fmadd_pd(vhalf_dt, vk2, vy));
+    }
+    for (; i < dim; i++) {
+        ws->ytemp->data[i] = y->data[i] + half_dt * ws->k2->data[i];
+    }
+#else
     for (size_t i = 0; i < dim; i++) {
         ws->ytemp->data[i] = y->data[i] + half_dt * ws->k2->data[i];
     }
+#endif
     f(t + half_dt, ws->ytemp, ws->k3, params);
 
     /* Stage 4: y_temp = y + dt * k3; k4 = f(t + dt, y_temp) */
+#if REACTOR_CORE_HAS_AVX2
+    __m256d vdt = _mm256_set1_pd(dt);
+    i = 0;
+    for (; i + 4 <= dim; i += 4) {
+        __m256d vy = _mm256_loadu_pd(&y->data[i]);
+        __m256d vk3 = _mm256_loadu_pd(&ws->k3->data[i]);
+        _mm256_storeu_pd(&ws->ytemp->data[i], _mm256_fmadd_pd(vdt, vk3, vy));
+    }
+    for (; i < dim; i++) {
+        ws->ytemp->data[i] = y->data[i] + dt * ws->k3->data[i];
+    }
+#else
     for (size_t i = 0; i < dim; i++) {
         ws->ytemp->data[i] = y->data[i] + dt * ws->k3->data[i];
     }
+#endif
     f(t + dt, ws->ytemp, ws->k4, params);
 
     /* Final Assembly: y_next = y + (dt / 6) * (k1 + 2*k2 + 2*k3 + k4) */
     const double dt_six = dt / 6.0;
+#if REACTOR_CORE_HAS_AVX2
+    __m256d vdt_six = _mm256_set1_pd(dt_six);
+    __m256d vtwo = _mm256_set1_pd(2.0);
+    i = 0;
+    for (; i + 4 <= dim; i += 4) {
+        __m256d vy = _mm256_loadu_pd(&y->data[i]);
+        __m256d vk1 = _mm256_loadu_pd(&ws->k1->data[i]);
+        __m256d vk2 = _mm256_loadu_pd(&ws->k2->data[i]);
+        __m256d vk3 = _mm256_loadu_pd(&ws->k3->data[i]);
+        __m256d vk4 = _mm256_loadu_pd(&ws->k4->data[i]);
+
+        __m256d vk23 = _mm256_add_pd(vk2, vk3);
+        __m256d vsum = _mm256_add_pd(vk1, vk4);
+        vsum = _mm256_fmadd_pd(vtwo, vk23, vsum);
+
+        _mm256_storeu_pd(&y_next->data[i], _mm256_fmadd_pd(vdt_six, vsum, vy));
+    }
+    for (; i < dim; i++) {
+        y_next->data[i] = y->data[i] + dt_six * (
+            ws->k1->data[i] +
+            2.0 * ws->k2->data[i] +
+            2.0 * ws->k3->data[i] +
+            ws->k4->data[i]
+        );
+    }
+#else
     for (size_t i = 0; i < dim; i++) {
         y_next->data[i] = y->data[i] + dt_six * (
             ws->k1->data[i] +
@@ -86,6 +152,7 @@ bool rk4_step(
             ws->k4->data[i]
         );
     }
+#endif
 
     return true;
 }
