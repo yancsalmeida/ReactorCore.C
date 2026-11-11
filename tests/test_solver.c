@@ -215,6 +215,100 @@ static void test_reactor_ffi_interface(void) {
     TEST_ASSERT(ca_arr[100] < ca_arr[0], "Concentration drops along trajectory");
 }
 
+static void test_rk45_workspace_and_decay(void) {
+    printf("Running test_rk45_workspace_and_decay (Adaptive Order & Accuracy)...\n");
+
+    Rk45Workspace *ws = rk45_workspace_create(1);
+    TEST_ASSERT(ws != NULL, "Rk45Workspace allocated successfully");
+    TEST_ASSERT(ws->dim == 1, "Rk45Workspace dimension matches");
+
+    Vector *y = vector_create(1);
+    y->data[0] = 1.0;
+
+    double k = 0.5;
+    double t_final = 2.0;
+
+    Rk45Control ctrl = rk45_default_control();
+    ctrl.rtol = 1e-6;
+    ctrl.atol = 1e-8;
+
+    Rk45AdaptiveStats stats;
+    bool ok = rk45_integrate_interval(ws, decay_ode, 0.0, t_final, y, 0.1, &ctrl, &stats, &k);
+    TEST_ASSERT(ok, "Adaptive RKF45 interval integration succeeds");
+
+    double y_analytical = exp(-k * t_final);
+    double error = fabs(y->data[0] - y_analytical);
+    TEST_ASSERT(error < 1e-6, "RKF45 decay solution matches analytical with < 1e-6 precision");
+    TEST_ASSERT(stats.steps_accepted > 0, "Adaptive integration accepted valid steps");
+    TEST_ASSERT(stats.max_local_error <= 1.0, "All accepted steps satisfy normalized local error <= 1.0");
+
+    vector_free(y);
+    rk45_workspace_free(ws);
+}
+
+static void test_rk45_adaptive_step_shrinkage_on_runaway(void) {
+    printf("Running test_rk45_adaptive_step_shrinkage_on_runaway...\n");
+
+    CstrParameters params = cstr_default_parameters();
+    /* Thermal runaway triggered by cooling jacket loss */
+    params.ua_j_per_min_k = 0.0;
+
+    Rk45Workspace *ws = rk45_workspace_create(2);
+    Vector *y = vector_create(2);
+    y->data[0] = params.ca_feed_mol_per_l;
+    y->data[1] = params.t_feed_kelvin;
+
+    Rk45Control ctrl = rk45_default_control();
+    ctrl.rtol = 1e-5;
+    ctrl.atol = 1e-7;
+
+    Rk45AdaptiveStats stats;
+    double initial_h = 0.05; /* 3 seconds */
+    bool ok = rk45_integrate_interval(ws, cstr_derivatives, 0.0, 1.0, y, initial_h, &ctrl, &stats, &params);
+
+    TEST_ASSERT(ok, "Adaptive integration completes across runaway regime");
+    TEST_ASSERT(stats.min_h < initial_h, "Adaptive RKF45 dynamically shrinks step size during thermal runaway");
+    TEST_ASSERT(y->data[1] > 380.0, "Exothermic runaway elevates reactor temperature");
+
+    vector_free(y);
+    rk45_workspace_free(ws);
+}
+
+static void test_reactor_ffi_adaptive_interface(void) {
+    printf("Running test_reactor_ffi_adaptive_interface...\n");
+
+    CstrParamsFFI params;
+    int rc = reactor_cstr_default_params(&params);
+    TEST_ASSERT(rc == 0, "Default parameters populated");
+
+    double ca = 1.0;
+    double temp = 350.0;
+    CstrAdaptiveStatsFFI stats;
+
+    rc = reactor_cstr_step_adaptive(&params, &ca, &temp, 0.01, 1e-5, 1e-7, &stats);
+    TEST_ASSERT(rc == 0, "Single adaptive RKF45 step succeeds");
+    TEST_ASSERT(ca < 1.0, "Adaptive step consumes reactant");
+    TEST_ASSERT(temp > 350.0, "Adaptive step generates reaction heat");
+    TEST_ASSERT(stats.steps_accepted > 0, "Steps accepted is > 0");
+
+    CstrStateFFI detailed;
+    rc = reactor_cstr_step_detailed_adaptive(&params, &ca, &temp, 0.01, 1e-5, 1e-7, 400.0, &detailed, &stats);
+    TEST_ASSERT(rc == 0, "Detailed adaptive step succeeds");
+    TEST_ASSERT(detailed.conversion_pct > 0.0, "Conversion percentage calculated");
+    TEST_ASSERT(!detailed.is_runaway, "Controlled operating point is safe");
+
+    /* Batch adaptive trajectory test */
+    const size_t n_steps = 50;
+    double times[51];
+    double ca_arr[51];
+    double temp_arr[51];
+    rc = reactor_cstr_simulate_adaptive_trajectory(&params, 1.0, 350.0, 0.01, n_steps, 1e-5, 1e-7, times, ca_arr, temp_arr, &stats);
+    TEST_ASSERT(rc == 0, "Batch adaptive trajectory simulation succeeds");
+    TEST_ASSERT(fabs(times[50] - 0.5) < 1e-6, "Final adaptive time matches 50 * 0.01");
+    TEST_ASSERT(ca_arr[50] < ca_arr[0], "Concentration drops continuously");
+    TEST_ASSERT(stats.steps_accepted >= n_steps, "Total accepted steps >= sample steps");
+}
+
 int main(void) {
     printf("=========================================\n");
     printf("   ReactorCore.C Test Suite (C11)        \n");
@@ -225,6 +319,9 @@ int main(void) {
     test_rk4_harmonic_oscillator_energy();
     test_cstr_steady_state_and_runaway();
     test_reactor_ffi_interface();
+    test_rk45_workspace_and_decay();
+    test_rk45_adaptive_step_shrinkage_on_runaway();
+    test_reactor_ffi_adaptive_interface();
 
     printf("=========================================\n");
     printf("Summary: %d passed, %d failed\n", g_tests_passed, g_tests_failed);

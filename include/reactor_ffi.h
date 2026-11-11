@@ -51,6 +51,18 @@ typedef struct {
 } CstrStateFFI;
 
 /**
+ * Diagnostic metrics returned from adaptive RKF45 integration.
+ * Matches CstrAdaptiveStatsFFI in ChemFlow.NET.
+ */
+typedef struct {
+    size_t steps_accepted;
+    size_t steps_rejected;
+    double final_h;
+    double min_h;
+    double max_local_error;
+} CstrAdaptiveStatsFFI;
+
+/**
  * Returns version and architecture string for runtime handshake.
  */
 REACTOR_API const char* reactor_core_version(void);
@@ -105,6 +117,58 @@ REACTOR_API int reactor_cstr_simulate_trajectory(
     double *out_time,
     double *out_ca,
     double *out_temp
+);
+
+/**
+ * Advances the CSTR state across a time step dt using adaptive RKF45 error control.
+ * Sub-steps adaptively to maintain local truncation error within tolerances.
+ * Updates ca and temp_k in-place.
+ * Returns 0 on success, -1 on invalid arguments or failure.
+ */
+REACTOR_API int reactor_cstr_step_adaptive(
+    const CstrParamsFFI *params,
+    double *ca,
+    double *temp_k,
+    double dt,
+    double rtol,
+    double atol,
+    CstrAdaptiveStatsFFI *out_stats
+);
+
+/**
+ * Advances the CSTR state with adaptive RKF45 and returns detailed diagnostics.
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+REACTOR_API int reactor_cstr_step_detailed_adaptive(
+    const CstrParamsFFI *params,
+    double *ca,
+    double *temp_k,
+    double dt,
+    double rtol,
+    double atol,
+    double runaway_threshold_k,
+    CstrStateFFI *out_state,
+    CstrAdaptiveStatsFFI *out_stats
+);
+
+/**
+ * High-speed batch trajectory simulation using adaptive RKF45 error control.
+ * Samples trajectory at 'steps' intervals over total_time = dt * steps.
+ * Populates pre-allocated arrays out_time, out_ca, out_temp (each size: steps + 1).
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+REACTOR_API int reactor_cstr_simulate_adaptive_trajectory(
+    const CstrParamsFFI *params,
+    double ca0,
+    double temp0,
+    double dt,
+    size_t steps,
+    double rtol,
+    double atol,
+    double *out_time,
+    double *out_ca,
+    double *out_temp,
+    CstrAdaptiveStatsFFI *out_stats
 );
 
 #ifdef __cplusplus
