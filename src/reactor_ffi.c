@@ -449,3 +449,209 @@ int reactor_cstr_batch_simulate_trajectory(
 
     return ok ? 0 : -1;
 }
+
+int reactor_core_simd_level(void) {
+#if REACTOR_CORE_HAS_AVX512
+    return 512;
+#elif REACTOR_CORE_HAS_AVX2
+    return 256;
+#else
+    return 0;
+#endif
+}
+
+/* ========================================================================= */
+/* Complex Series-Parallel Kinetics & Dynamic Jacket FFI Implementation      */
+/* ========================================================================= */
+
+int reactor_cstr_series_parallel_default_params(CstrSeriesParallelParamsFFI *out_params) {
+    if (!out_params) return -1;
+    CstrSeriesParallelParams def = cstr_series_parallel_default_parameters();
+    memcpy(out_params, &def, sizeof(CstrSeriesParallelParamsFFI));
+    return 0;
+}
+
+int reactor_cstr_series_parallel_rates(
+    const CstrSeriesParallelParamsFFI *params,
+    double Ca,
+    double Cb,
+    double T,
+    double *out_r1,
+    double *out_r2,
+    double *out_r3
+) {
+    if (!params) return -1;
+    cstr_series_parallel_rates((const CstrSeriesParallelParams*)params, Ca, Cb, T, out_r1, out_r2, out_r3);
+    return 0;
+}
+
+int reactor_cstr_series_parallel_step_rk4(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+) {
+    if (!params || !ca || !cb || !cc || !cd || !temp || !temp_j || dt <= 0.0) {
+        return -1;
+    }
+    return cstr_series_parallel_step_rk4(
+        (const CstrSeriesParallelParams*)params,
+        ca, cb, cc, cd, temp, temp_j, dt
+    );
+}
+
+int reactor_cstr_series_parallel_step_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_state
+) {
+    if (!params || !ca || !cb || !cc || !cd || !temp || !temp_j || !out_state || dt <= 0.0) {
+        return -1;
+    }
+    return cstr_series_parallel_step_detailed(
+        (const CstrSeriesParallelParams*)params,
+        ca, cb, cc, cd, temp, temp_j, dt, runaway_threshold_k,
+        (CstrSeriesParallelState*)out_state
+    );
+}
+
+int reactor_cstr_series_parallel_batch_step_rk4(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca_array,
+    double *cb_array,
+    double *cc_array,
+    double *cd_array,
+    double *temp_array,
+    double *temp_j_array,
+    size_t n_reactors,
+    double dt
+) {
+    if (!params || !ca_array || !cb_array || !cc_array || !cd_array ||
+        !temp_array || !temp_j_array || n_reactors == 0 || dt <= 0.0) {
+        return -1;
+    }
+
+    bool ok = cstr_series_parallel_batch_step_rk4(
+        n_reactors,
+        (const CstrSeriesParallelParams*)params,
+        ca_array,
+        cb_array,
+        cc_array,
+        cd_array,
+        temp_array,
+        temp_j_array,
+        dt
+    );
+
+    return ok ? 0 : -1;
+}
+
+int reactor_cstr_series_parallel_batch_step_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca_array,
+    double *cb_array,
+    double *cc_array,
+    double *cd_array,
+    double *temp_array,
+    double *temp_j_array,
+    size_t n_reactors,
+    double dt,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_states
+) {
+    int rc = reactor_cstr_series_parallel_batch_step_rk4(
+        params, ca_array, cb_array, cc_array, cd_array, temp_array, temp_j_array, n_reactors, dt
+    );
+    if (rc != 0 || !out_states) return rc;
+
+    const CstrSeriesParallelParams *p = (const CstrSeriesParallelParams*)params;
+    double ca0 = p->ca_feed_mol_per_l > 1e-12 ? p->ca_feed_mol_per_l : 1.0;
+
+    for (size_t i = 0; i < n_reactors; i++) {
+        double ca     = ca_array[i];
+        double cb     = cb_array[i];
+        double cc     = cc_array[i];
+        double cd     = cd_array[i];
+        double temp   = temp_array[i];
+        double temp_j = temp_j_array[i];
+
+        double r1, r2, r3;
+        cstr_series_parallel_rates(p, ca, cb, temp, &r1, &r2, &r3);
+
+        out_states[i].ca_mol_per_l       = ca;
+        out_states[i].cb_mol_per_l       = cb;
+        out_states[i].cc_mol_per_l       = cc;
+        out_states[i].cd_mol_per_l       = cd;
+        out_states[i].temp_kelvin        = temp;
+        out_states[i].jacket_temp_kelvin = temp_j;
+
+        out_states[i].conversion_a_pct   = ((p->ca_feed_mol_per_l - ca) / ca0) * 100.0;
+        out_states[i].yield_b_pct        = ((cb - p->cb_feed_mol_per_l) / ca0) * 100.0;
+
+        double total_p = cb + cc + cd;
+        out_states[i].selectivity_b_pct  = total_p > 1e-12 ? (cb / total_p) * 100.0 : 100.0;
+
+        out_states[i].rate_r1_mol_per_l_min = r1;
+        out_states[i].rate_r2_mol_per_l_min = r2;
+        out_states[i].rate_r3_mol_per_l_min = r3;
+
+        double heat_gen_min = p->volume_liters *
+            (p->delta_h1_j_per_mol * r1 + p->delta_h2_j_per_mol * r2 + p->delta_h3_j_per_mol * r3);
+        out_states[i].heat_generated_watts = heat_gen_min / 60.0;
+
+        double heat_rem_min = p->ua_j_per_min_k * (temp - temp_j);
+        out_states[i].heat_removed_watts   = heat_rem_min / 60.0;
+
+        out_states[i].is_thermal_runaway   = (temp >= runaway_threshold_k);
+    }
+
+    return 0;
+}
+
+int reactor_cstr_series_parallel_batch_simulate_trajectory(
+    const CstrSeriesParallelParamsFFI *params,
+    const double *ca0,
+    const double *cb0,
+    const double *cc0,
+    const double *cd0,
+    const double *temp0,
+    const double *temp_j0,
+    size_t n_reactors,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_cb,
+    double *out_cc,
+    double *out_cd,
+    double *out_temp,
+    double *out_temp_j
+) {
+    if (!params || !ca0 || !cb0 || !cc0 || !cd0 || !temp0 || !temp_j0 ||
+        !out_ca || !out_cb || !out_cc || !out_cd || !out_temp || !out_temp_j ||
+        n_reactors == 0 || dt <= 0.0) {
+        return -1;
+    }
+
+    bool ok = cstr_series_parallel_batch_simulate_trajectory(
+        n_reactors,
+        (const CstrSeriesParallelParams*)params,
+        ca0, cb0, cc0, cd0, temp0, temp_j0,
+        dt, steps,
+        out_time,
+        out_ca, out_cb, out_cc, out_cd, out_temp, out_temp_j
+    );
+
+    return ok ? 0 : -1;
+}

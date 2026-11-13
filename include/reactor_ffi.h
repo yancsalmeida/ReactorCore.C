@@ -220,6 +220,145 @@ REACTOR_API int reactor_cstr_batch_simulate_trajectory(
     double *out_temp
 );
 
+/**
+ * Returns the compiled SIMD instruction width: 512 for AVX-512, 256 for AVX2+FMA, 0 for scalar.
+ */
+REACTOR_API int reactor_core_simd_level(void);
+
+/* ========================================================================= */
+/* Complex Series-Parallel Kinetics & Dynamic Jacket FFI Exports             */
+/* ========================================================================= */
+
+typedef struct {
+    double volumetric_flow_l_per_min;
+    double volume_liters;
+    double rho_cp_j_per_l_k;
+
+    double k0_1_per_min;
+    double ea1_over_r_kelvin;
+    double delta_h1_j_per_mol;
+
+    double k0_2_per_min;
+    double ea2_over_r_kelvin;
+    double delta_h2_j_per_mol;
+
+    double k0_3_per_min;
+    double ea3_over_r_kelvin;
+    double delta_h3_j_per_mol;
+
+    double ca_feed_mol_per_l;
+    double cb_feed_mol_per_l;
+    double cc_feed_mol_per_l;
+    double cd_feed_mol_per_l;
+    double t_feed_kelvin;
+
+    double jacket_volume_liters;
+    double jacket_flow_l_per_min;
+    double jacket_rho_cp_j_per_l_k;
+    double jacket_t_in_kelvin;
+    double ua_j_per_min_k;
+} CstrSeriesParallelParamsFFI;
+
+typedef struct {
+    double ca_mol_per_l;
+    double cb_mol_per_l;
+    double cc_mol_per_l;
+    double cd_mol_per_l;
+    double temp_kelvin;
+    double jacket_temp_kelvin;
+    double conversion_a_pct;
+    double yield_b_pct;
+    double selectivity_b_pct;
+    double rate_r1_mol_per_l_min;
+    double rate_r2_mol_per_l_min;
+    double rate_r3_mol_per_l_min;
+    double heat_generated_watts;
+    double heat_removed_watts;
+    bool is_thermal_runaway;
+} CstrSeriesParallelStateFFI;
+
+REACTOR_API int reactor_cstr_series_parallel_default_params(CstrSeriesParallelParamsFFI *out_params);
+
+REACTOR_API int reactor_cstr_series_parallel_rates(
+    const CstrSeriesParallelParamsFFI *params,
+    double Ca,
+    double Cb,
+    double T,
+    double *out_r1,
+    double *out_r2,
+    double *out_r3
+);
+
+REACTOR_API int reactor_cstr_series_parallel_step_rk4(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+);
+
+REACTOR_API int reactor_cstr_series_parallel_step_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_state
+);
+
+REACTOR_API int reactor_cstr_series_parallel_batch_step_rk4(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca_array,
+    double *cb_array,
+    double *cc_array,
+    double *cd_array,
+    double *temp_array,
+    double *temp_j_array,
+    size_t n_reactors,
+    double dt
+);
+
+REACTOR_API int reactor_cstr_series_parallel_batch_step_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca_array,
+    double *cb_array,
+    double *cc_array,
+    double *cd_array,
+    double *temp_array,
+    double *temp_j_array,
+    size_t n_reactors,
+    double dt,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_states
+);
+
+REACTOR_API int reactor_cstr_series_parallel_batch_simulate_trajectory(
+    const CstrSeriesParallelParamsFFI *params,
+    const double *ca0,
+    const double *cb0,
+    const double *cc0,
+    const double *cd0,
+    const double *temp0,
+    const double *temp_j0,
+    size_t n_reactors,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_cb,
+    double *out_cc,
+    double *out_cd,
+    double *out_temp,
+    double *out_temp_j
+);
+
 #ifdef __cplusplus
 }
 #endif

@@ -161,4 +161,225 @@ bool cstr_batch_simulate_trajectory(
     double *out_temp
 );
 
+/* ========================================================================= */
+/* Complex Series-Parallel Kinetics (A -> B -> C, A -> D) & Dynamic Jacket  */
+/* ========================================================================= */
+
+/**
+ * @brief Parameters for an exothermic CSTR with complex series-parallel kinetics:
+ *   1. A -> B  (Desirable intermediate product, rate r1)
+ *   2. B -> C  (Consecutive unwanted degradation by-product, rate r2)
+ *   3. A -> D  (Competitive parallel side-reaction by-product, rate r3)
+ * coupled to a dynamic non-linear cooling jacket with fluid thermal mass.
+ */
+typedef struct {
+    /* Reactor Hydraulics */
+    double volumetric_flow_l_per_min;  /* q: Reactor volumetric feed flow (L/min) */
+    double volume_liters;              /* V: Reactor fluid volume (L) */
+    double rho_cp_j_per_l_k;           /* rho*Cp: Reactor fluid volumetric heat capacity (J/(L·K)) */
+
+    /* Kinetics 1: A -> B */
+    double k0_1_per_min;               /* k0_1: Arrhenius frequency factor (1/min) */
+    double ea1_over_r_kelvin;          /* Ea_1 / R: Activation energy (K) */
+    double delta_h1_j_per_mol;         /* -dH_1: Heat of reaction (J/mol, >0 for exothermic) */
+
+    /* Kinetics 2: B -> C (degradation by-product) */
+    double k0_2_per_min;               /* k0_2: Arrhenius frequency factor (1/min) */
+    double ea2_over_r_kelvin;          /* Ea_2 / R: Activation energy (K) */
+    double delta_h2_j_per_mol;         /* -dH_2: Heat of reaction (J/mol, >0 for exothermic) */
+
+    /* Kinetics 3: A -> D (parallel side by-product) */
+    double k0_3_per_min;               /* k0_3: Arrhenius frequency factor (1/min) */
+    double ea3_over_r_kelvin;          /* Ea_3 / R: Activation energy (K) */
+    double delta_h3_j_per_mol;         /* -dH_3: Heat of reaction (J/mol, >0 for exothermic) */
+
+    /* Feed Concentrations and Temperature */
+    double ca_feed_mol_per_l;          /* CA0: Feed reactant A concentration (mol/L) */
+    double cb_feed_mol_per_l;          /* CB0: Feed product B concentration (mol/L) */
+    double cc_feed_mol_per_l;          /* CC0: Feed by-product C concentration (mol/L) */
+    double cd_feed_mol_per_l;          /* CD0: Feed by-product D concentration (mol/L) */
+    double t_feed_kelvin;              /* T0: Feed temperature (K) */
+
+    /* Dynamic Jacket Cooling System */
+    double jacket_volume_liters;       /* Vj: Jacket fluid volume (L) */
+    double jacket_flow_l_per_min;      /* qj: Coolant volumetric flow rate (L/min) */
+    double jacket_rho_cp_j_per_l_k;    /* (rho*Cp)_j: Coolant volumetric heat capacity (J/(L·K)) */
+    double jacket_t_in_kelvin;         /* Tj_in: Coolant inlet temperature (K) */
+    double ua_j_per_min_k;             /* UA: Heat transfer area * coefficient (J/(min·K)) */
+} CstrSeriesParallelParams;
+
+/**
+ * @brief Dynamic state telemetry and chemical performance metrics for series-parallel CSTR.
+ */
+typedef struct {
+    double ca_mol_per_l;
+    double cb_mol_per_l;
+    double cc_mol_per_l;
+    double cd_mol_per_l;
+    double temp_kelvin;
+    double jacket_temp_kelvin;
+    double conversion_a_pct;           /* Conversion: (CA0 - CA)/CA0 * 100% */
+    double yield_b_pct;                /* Yield: (CB - CB0)/CA0 * 100% */
+    double selectivity_b_pct;          /* Selectivity: CB / (CB + CC + CD) * 100% */
+    double rate_r1_mol_per_l_min;
+    double rate_r2_mol_per_l_min;
+    double rate_r3_mol_per_l_min;
+    double heat_generated_watts;       /* Total reaction heat release rate (Watts) */
+    double heat_removed_watts;         /* Heat removal rate by jacket (Watts) */
+    bool is_thermal_runaway;
+} CstrSeriesParallelState;
+
+/**
+ * @brief Standard default benchmark parameters for series-parallel exothermic CSTR with dynamic jacket.
+ */
+CstrSeriesParallelParams cstr_series_parallel_default_parameters(void);
+
+/**
+ * @brief Calculates the 3 simultaneous Arrhenius reaction rates:
+ *   r1 = k0_1 * exp(-Ea1 / (R*T)) * Ca
+ *   r2 = k0_2 * exp(-Ea2 / (R*T)) * Cb
+ *   r3 = k0_3 * exp(-Ea3 / (R*T)) * Ca
+ */
+void cstr_series_parallel_rates(
+    const CstrSeriesParallelParams *params,
+    double Ca,
+    double Cb,
+    double T,
+    double *out_r1,
+    double *out_r2,
+    double *out_r3
+);
+
+/**
+ * @brief Evaluates coupled 6-variable ODE system:
+ *   dCa/dt = (q/V)*(CA0 - Ca) - r1 - r3
+ *   dCb/dt = (q/V)*(CB0 - Cb) + r1 - r2
+ *   dCc/dt = (q/V)*(CC0 - Cc) + r2
+ *   dCd/dt = (q/V)*(CD0 - Cd) + r3
+ *   dT/dt  = (q/V)*(T0 - T) + [(-dH1)*r1 + (-dH2)*r2 + (-dH3)*r3]/(rho*Cp) - (UA/(V*rho*Cp))*(T - Tj)
+ *   dTj/dt = (qj/Vj)*(Tj_in - Tj) + (UA / (Vj * (rho*Cp)_j))*(T - Tj)
+ */
+void cstr_series_parallel_derivatives(double t, const Vector *y, Vector *dydt, void *params);
+
+/**
+ * @brief Advances a single series-parallel CSTR by an RK4 step of length dt (min).
+ * Updates ca, cb, cc, cd, temp, and temp_j in-place.
+ */
+int cstr_series_parallel_step_rk4(
+    const CstrSeriesParallelParams *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+);
+
+/**
+ * @brief Advances a series-parallel CSTR by an RK4 step and populates full detailed metrics.
+ */
+int cstr_series_parallel_step_detailed(
+    const CstrSeriesParallelParams *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt,
+    double runaway_threshold_k,
+    CstrSeriesParallelState *out_state
+);
+
+/**
+ * @brief Pre-allocated workspace for ensemble series-parallel multi-reactor simulation.
+ */
+typedef struct {
+    size_t capacity;
+    double *k1_ca, *k1_cb, *k1_cc, *k1_cd, *k1_temp, *k1_tj;
+    double *k2_ca, *k2_cb, *k2_cc, *k2_cd, *k2_temp, *k2_tj;
+    double *k3_ca, *k3_cb, *k3_cc, *k3_cd, *k3_temp, *k3_tj;
+    double *k4_ca, *k4_cb, *k4_cc, *k4_cd, *k4_temp, *k4_tj;
+    double *temp_ca, *temp_cb, *temp_cc, *temp_cd, *temp_temp, *temp_tj;
+} CstrSeriesParallelWorkspace;
+
+CstrSeriesParallelWorkspace* cstr_series_parallel_workspace_create(size_t capacity);
+void cstr_series_parallel_workspace_free(CstrSeriesParallelWorkspace *ws);
+
+/**
+ * @brief Parallel evaluation of coupled series-parallel CSTR derivatives across an ensemble of N reactors.
+ * Accelerated with SIMD AVX-512 / AVX2 + FMA with scalar fallback.
+ */
+void cstr_series_parallel_batch_derivatives(
+    size_t n,
+    const CstrSeriesParallelParams *params,
+    const double *ca,
+    const double *cb,
+    const double *cc,
+    const double *cd,
+    const double *temp,
+    const double *temp_j,
+    double *out_dcadt,
+    double *out_dcbdt,
+    double *out_dccdt,
+    double *out_dcddt,
+    double *out_dtdt,
+    double *out_dtjdt
+);
+
+/**
+ * @brief Advances an ensemble of N series-parallel CSTR reactors by an RK4 step using pre-allocated workspace.
+ */
+bool cstr_series_parallel_batch_step_rk4_ws(
+    CstrSeriesParallelWorkspace *ws,
+    size_t n,
+    const CstrSeriesParallelParams *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+);
+
+/**
+ * @brief Advances an ensemble of N series-parallel CSTR reactors by an RK4 step.
+ */
+bool cstr_series_parallel_batch_step_rk4(
+    size_t n,
+    const CstrSeriesParallelParams *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+);
+
+/**
+ * @brief Simulates dynamic trajectories for an ensemble of N series-parallel reactors over multiple RK4 steps.
+ */
+bool cstr_series_parallel_batch_simulate_trajectory(
+    size_t n,
+    const CstrSeriesParallelParams *params,
+    const double *ca0,
+    const double *cb0,
+    const double *cc0,
+    const double *cd0,
+    const double *temp0,
+    const double *temp_j0,
+    double dt,
+    size_t steps,
+    double *out_time,
+    double *out_ca,
+    double *out_cb,
+    double *out_cc,
+    double *out_cd,
+    double *out_temp,
+    double *out_temp_j
+);
+
 #endif /* REACTOR_CORE_CSTR_H */

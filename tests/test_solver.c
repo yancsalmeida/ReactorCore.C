@@ -525,6 +525,212 @@ static void test_simd_batch_benchmark(void) {
     cstr_batch_workspace_free(ws);
 }
 
+static void test_series_parallel_kinetics_and_dynamic_jacket(void) {
+    printf("Running test_series_parallel_kinetics_and_dynamic_jacket...\n");
+
+    CstrSeriesParallelParams p = cstr_series_parallel_default_parameters();
+    TEST_ASSERT(fabs(p.volumetric_flow_l_per_min - 100.0) < 1e-6, "Default flow rate");
+    TEST_ASSERT(fabs(p.volume_liters - 100.0) < 1e-6, "Default reactor volume");
+    TEST_ASSERT(fabs(p.jacket_volume_liters - 25.0) < 1e-6, "Default jacket volume");
+    TEST_ASSERT(fabs(p.jacket_flow_l_per_min - 50.0) < 1e-6, "Default jacket flow rate");
+
+    /* Test Arrhenius reaction rate calculation */
+    double r1, r2, r3;
+    cstr_series_parallel_rates(&p, 1.0, 0.5, 350.0, &r1, &r2, &r3);
+    TEST_ASSERT(r1 > 0.0, "Reaction rate r1 > 0");
+    TEST_ASSERT(r2 > 0.0, "Reaction rate r2 > 0");
+    TEST_ASSERT(r3 > 0.0, "Reaction rate r3 > 0");
+
+    /* Higher temperature must strictly accelerate all reactions */
+    double r1_hot, r2_hot, r3_hot;
+    cstr_series_parallel_rates(&p, 1.0, 0.5, 380.0, &r1_hot, &r2_hot, &r3_hot);
+    TEST_ASSERT(r1_hot > r1, "r1 accelerates with temperature");
+    TEST_ASSERT(r2_hot > r2, "r2 accelerates with temperature");
+    TEST_ASSERT(r3_hot > r3, "r3 accelerates with temperature");
+
+    /* Test single-step integration and dynamic thermal coupling */
+    double ca = 1.0, cb = 0.0, cc = 0.0, cd = 0.0;
+    double temp = 350.0, temp_j = 295.0;
+    double dt = 0.01; /* 0.01 min = 0.6 seconds */
+
+    CstrSeriesParallelState state;
+    for (int step = 0; step < 50; step++) {
+        int rc = cstr_series_parallel_step_detailed(
+            &p, &ca, &cb, &cc, &cd, &temp, &temp_j, dt, 420.0, &state
+        );
+        TEST_ASSERT(rc == 0, "cstr_series_parallel_step_detailed succeeded");
+    }
+
+    /* Reactant A must be converted */
+    TEST_ASSERT(ca < 1.0, "Reactant A consumed");
+    TEST_ASSERT(state.conversion_a_pct > 0.0, "Conversion of A > 0%");
+
+    /* Product B must be produced */
+    TEST_ASSERT(cb > 0.0, "Product B generated");
+    TEST_ASSERT(state.yield_b_pct > 0.0, "Yield of B > 0%");
+
+    /* By-products C and D must be detected */
+    TEST_ASSERT(cc > 0.0, "Consecutive by-product C detected");
+    TEST_ASSERT(cd > 0.0, "Parallel by-product D detected");
+
+    /* Overall mass balance: total molar concentration should equal CA0 */
+    double total_conc = ca + cb + cc + cd;
+    TEST_ASSERT(fabs(total_conc - 1.0) < 0.02, "Overall stoichiometric molar balance closure");
+
+    /* Selectivity must be in [0%, 100%] */
+    TEST_ASSERT(state.selectivity_b_pct > 0.0 && state.selectivity_b_pct <= 100.0, "Selectivity B valid");
+
+    /* Jacket fluid temperature must rise above inlet temperature (absorbing reactor heat) */
+    TEST_ASSERT(temp_j > p.jacket_t_in_kelvin, "Jacket temperature rises from cooling load");
+
+    /* Heat generated and heat removed must be strictly positive */
+    TEST_ASSERT(state.heat_generated_watts > 0.0, "Heat generated > 0 W");
+    TEST_ASSERT(state.heat_removed_watts > 0.0, "Heat removed > 0 W");
+}
+
+static void test_series_parallel_batch_simd_parity(void) {
+    printf("Running test_series_parallel_batch_simd_parity (SIMD vs Scalar Parity)...\n");
+
+    const size_t n = 16;
+    CstrSeriesParallelParams p = cstr_series_parallel_default_parameters();
+
+    double ca_batch[16], cb_batch[16], cc_batch[16], cd_batch[16], temp_batch[16], tj_batch[16];
+    double ca_seq[16], cb_seq[16], cc_seq[16], cd_seq[16], temp_seq[16], tj_seq[16];
+
+    for (size_t i = 0; i < n; i++) {
+        ca_batch[i] = ca_seq[i] = 1.0 - 0.02 * (double)i;
+        cb_batch[i] = cb_seq[i] = 0.01 * (double)i;
+        cc_batch[i] = cc_seq[i] = 0.005 * (double)i;
+        cd_batch[i] = cd_seq[i] = 0.005 * (double)i;
+        temp_batch[i] = temp_seq[i] = 340.0 + 2.0 * (double)i;
+        tj_batch[i]   = tj_seq[i]   = 295.0 + 1.0 * (double)i;
+    }
+
+    double dt = 0.005;
+
+    /* Batch integration (SIMD accelerated) */
+    bool batch_ok = cstr_series_parallel_batch_step_rk4(
+        n, &p, ca_batch, cb_batch, cc_batch, cd_batch, temp_batch, tj_batch, dt
+    );
+    TEST_ASSERT(batch_ok, "Batch RK4 step succeeded");
+
+    /* Sequential integration */
+    for (size_t i = 0; i < n; i++) {
+        int rc = cstr_series_parallel_step_rk4(
+            &p, &ca_seq[i], &cb_seq[i], &cc_seq[i], &cd_seq[i], &temp_seq[i], &tj_seq[i], dt
+        );
+        TEST_ASSERT(rc == 0, "Sequential RK4 step succeeded");
+
+        TEST_ASSERT(fabs(ca_batch[i] - ca_seq[i]) < 1e-10, "Ca batch vs seq parity");
+        TEST_ASSERT(fabs(cb_batch[i] - cb_seq[i]) < 1e-10, "Cb batch vs seq parity");
+        TEST_ASSERT(fabs(cc_batch[i] - cc_seq[i]) < 1e-10, "Cc batch vs seq parity");
+        TEST_ASSERT(fabs(cd_batch[i] - cd_seq[i]) < 1e-10, "Cd batch vs seq parity");
+        TEST_ASSERT(fabs(temp_batch[i] - temp_seq[i]) < 1e-10, "Temp batch vs seq parity");
+        TEST_ASSERT(fabs(tj_batch[i] - tj_seq[i]) < 1e-10, "Tj batch vs seq parity");
+    }
+}
+
+static void test_series_parallel_ffi_interface(void) {
+    printf("Running test_series_parallel_ffi_interface...\n");
+
+    CstrSeriesParallelParamsFFI p_ffi;
+    int rc = reactor_cstr_series_parallel_default_params(&p_ffi);
+    TEST_ASSERT(rc == 0, "reactor_cstr_series_parallel_default_params succeeded");
+
+    /* Test SIMD level query */
+    int simd_lvl = reactor_core_simd_level();
+    TEST_ASSERT(simd_lvl == 256 || simd_lvl == 512, "SIMD level is AVX2 or AVX-512");
+
+    /* Test batch trajectory FFI */
+    const size_t n = 4;
+    const size_t steps = 20;
+    double ca0[4] = { 1.0, 0.9, 0.8, 0.7 };
+    double cb0[4] = { 0.0, 0.05, 0.1, 0.15 };
+    double cc0[4] = { 0.0, 0.0, 0.0, 0.0 };
+    double cd0[4] = { 0.0, 0.0, 0.0, 0.0 };
+    double t0[4]  = { 345.0, 350.0, 355.0, 360.0 };
+    double tj0[4] = { 295.0, 295.0, 295.0, 295.0 };
+
+    double *out_time = (double*)malloc((steps + 1) * sizeof(double));
+    double *out_ca   = (double*)malloc((steps + 1) * n * sizeof(double));
+    double *out_cb   = (double*)malloc((steps + 1) * n * sizeof(double));
+    double *out_cc   = (double*)malloc((steps + 1) * n * sizeof(double));
+    double *out_cd   = (double*)malloc((steps + 1) * n * sizeof(double));
+    double *out_temp = (double*)malloc((steps + 1) * n * sizeof(double));
+    double *out_tj   = (double*)malloc((steps + 1) * n * sizeof(double));
+
+    rc = reactor_cstr_series_parallel_batch_simulate_trajectory(
+        &p_ffi, ca0, cb0, cc0, cd0, t0, tj0, n, 0.01, steps,
+        out_time, out_ca, out_cb, out_cc, out_cd, out_temp, out_tj
+    );
+    TEST_ASSERT(rc == 0, "reactor_cstr_series_parallel_batch_simulate_trajectory succeeded");
+
+    TEST_ASSERT(fabs(out_time[0] - 0.0) < 1e-9, "Time 0 is 0.0");
+    TEST_ASSERT(fabs(out_time[steps] - 0.20) < 1e-9, "Final time is 0.20 min");
+
+    /* Verify trajectory continuity */
+    for (size_t s = 1; s <= steps; s++) {
+        for (size_t j = 0; j < n; j++) {
+            size_t idx = s * n + j;
+            TEST_ASSERT(out_ca[idx] >= 0.0, "Ca trajectory non-negative");
+            TEST_ASSERT(out_cb[idx] >= 0.0, "Cb trajectory non-negative");
+            TEST_ASSERT(out_temp[idx] >= 50.0, "Temp trajectory valid");
+            TEST_ASSERT(out_tj[idx] >= 50.0, "Tj trajectory valid");
+        }
+    }
+
+    free(out_time); free(out_ca); free(out_cb); free(out_cc); free(out_cd); free(out_temp); free(out_tj);
+}
+
+static void test_series_parallel_batch_benchmark(void) {
+    printf("Running test_series_parallel_batch_benchmark (64 Series-Parallel Reactors x 1000 Steps)...\n");
+
+    const size_t n = 64;
+    const size_t steps = 1000;
+    const double dt = 0.005;
+
+    CstrSeriesParallelParams p = cstr_series_parallel_default_parameters();
+    CstrSeriesParallelWorkspace *ws = cstr_series_parallel_workspace_create(n);
+    TEST_ASSERT(ws != NULL, "CstrSeriesParallelWorkspace allocated for 64 reactors");
+
+    double *ca = (double*)malloc(n * sizeof(double));
+    double *cb = (double*)malloc(n * sizeof(double));
+    double *cc = (double*)malloc(n * sizeof(double));
+    double *cd = (double*)malloc(n * sizeof(double));
+    double *temp = (double*)malloc(n * sizeof(double));
+    double *temp_j = (double*)malloc(n * sizeof(double));
+
+    for (size_t i = 0; i < n; i++) {
+        ca[i] = 1.0;
+        cb[i] = 0.0;
+        cc[i] = 0.0;
+        cd[i] = 0.0;
+        temp[i] = 345.0 + (double)(i % 10);
+        temp_j[i] = 295.0;
+    }
+
+    clock_t start = clock();
+    for (size_t s = 0; s < steps; s++) {
+        bool ok = cstr_series_parallel_batch_step_rk4_ws(
+            ws, n, &p, ca, cb, cc, cd, temp, temp_j, dt
+        );
+        if (!ok) break;
+    }
+    clock_t end = clock();
+
+    double elapsed_sec = (double)(end - start) / CLOCKS_PER_SEC;
+    double total_evals = (double)n * (double)steps * 4.0; /* 4 RK4 stages per step */
+    double evals_per_sec = total_evals / (elapsed_sec > 1e-9 ? elapsed_sec : 1e-9);
+
+    printf("   [Series-Parallel Benchmark] 64 reactors x 1000 steps completed in %.4f s (%.1f million stage evals/sec)\n",
+           elapsed_sec, evals_per_sec / 1e6);
+
+    TEST_ASSERT(elapsed_sec < 1.0, "Series-parallel batch benchmark completed in < 1.0 s");
+
+    free(ca); free(cb); free(cc); free(cd); free(temp); free(temp_j);
+    cstr_series_parallel_workspace_free(ws);
+}
+
 int main(void) {
     printf("=========================================\n");
     printf("   ReactorCore.C Test Suite (C11)        \n");
@@ -542,6 +748,10 @@ int main(void) {
     test_cstr_batch_simd_derivatives_and_rk4();
     test_cstr_batch_ffi_interface();
     test_simd_batch_benchmark();
+    test_series_parallel_kinetics_and_dynamic_jacket();
+    test_series_parallel_batch_simd_parity();
+    test_series_parallel_ffi_interface();
+    test_series_parallel_batch_benchmark();
 
     printf("=========================================\n");
     printf("Summary: %d passed, %d failed\n", g_tests_passed, g_tests_failed);

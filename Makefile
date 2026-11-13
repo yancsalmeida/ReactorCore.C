@@ -1,5 +1,8 @@
 CC = gcc
 CFLAGS = -std=c11 -Wall -Wextra -Werror -pedantic -mavx2 -mfma -Iinclude -O3 -fPIC
+ifdef AVX512
+  CFLAGS += -mavx512f -mavx512dq
+endif
 LDFLAGS = -lm
 
 SRC_DIR = src
