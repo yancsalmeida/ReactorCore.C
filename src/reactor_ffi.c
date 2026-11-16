@@ -1,6 +1,7 @@
 #include "reactor_ffi.h"
 #include "cstr.h"
 #include "rk4.h"
+#include "stiff_solver.h"
 #include "vector.h"
 #include <stdlib.h>
 #include <string.h>
@@ -654,4 +655,59 @@ int reactor_cstr_series_parallel_batch_simulate_trajectory(
     );
 
     return ok ? 0 : -1;
+}
+
+int reactor_cstr_step_ros3(
+    const CstrParamsFFI *params,
+    double *ca,
+    double *temp_k,
+    double dt
+) {
+    if (!params || !ca || !temp_k || dt <= 0.0) {
+        return -1;
+    }
+    return cstr_step_ros3((const CstrParameters*)params, ca, temp_k, dt);
+}
+
+int reactor_cstr_series_parallel_step_ros3(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+) {
+    if (!params || !ca || !cb || !cc || !cd || !temp || !temp_j || dt <= 0.0) {
+        return -1;
+    }
+    return cstr_series_parallel_step_ros3(
+        (const CstrSeriesParallelParams*)params,
+        ca, cb, cc, cd, temp, temp_j, dt
+    );
+}
+
+int reactor_cstr_series_parallel_step_ros3_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt,
+    double rtol,
+    double atol,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_state
+) {
+    if (!params || !ca || !cb || !cc || !cd || !temp || !temp_j || !out_state || dt <= 0.0) {
+        return -1;
+    }
+    return cstr_series_parallel_step_ros3_detailed(
+        (const CstrSeriesParallelParams*)params,
+        ca, cb, cc, cd, temp, temp_j, dt, rtol, atol, runaway_threshold_k,
+        (CstrSeriesParallelState*)out_state
+    );
 }

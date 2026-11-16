@@ -359,6 +359,43 @@ REACTOR_API int reactor_cstr_series_parallel_batch_simulate_trajectory(
     double *out_temp_j
 );
 
+/* ========================================================================= */
+/* L-Stable Stiff Rosenbrock-3 (ROS3L) FFI Exports                           */
+/* ========================================================================= */
+
+REACTOR_API int reactor_cstr_step_ros3(
+    const CstrParamsFFI *params,
+    double *ca,
+    double *temp_k,
+    double dt
+);
+
+REACTOR_API int reactor_cstr_series_parallel_step_ros3(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt
+);
+
+REACTOR_API int reactor_cstr_series_parallel_step_ros3_detailed(
+    const CstrSeriesParallelParamsFFI *params,
+    double *ca,
+    double *cb,
+    double *cc,
+    double *cd,
+    double *temp,
+    double *temp_j,
+    double dt,
+    double rtol,
+    double atol,
+    double runaway_threshold_k,
+    CstrSeriesParallelStateFFI *out_state
+);
+
 #ifdef __cplusplus
 }
 #endif

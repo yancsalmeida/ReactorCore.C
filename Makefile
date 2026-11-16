@@ -10,7 +10,7 @@ INC_DIR = include
 TEST_DIR = tests
 BUILD_DIR = build
 
-SRCS = $(SRC_DIR)/vector.c $(SRC_DIR)/rk4.c $(SRC_DIR)/cstr.c $(SRC_DIR)/reactor_ffi.c
+SRCS = $(SRC_DIR)/vector.c $(SRC_DIR)/rk4.c $(SRC_DIR)/cstr.c $(SRC_DIR)/stiff_solver.c $(SRC_DIR)/reactor_ffi.c
 OBJS = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRCS))
 
 TARGET = reactor_core

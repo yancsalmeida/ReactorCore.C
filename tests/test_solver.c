@@ -1,6 +1,7 @@
 #include "vector.h"
 #include "rk4.h"
 #include "cstr.h"
+#include "stiff_solver.h"
 #include "reactor_ffi.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -731,6 +732,74 @@ static void test_series_parallel_batch_benchmark(void) {
     cstr_series_parallel_workspace_free(ws);
 }
 
+static void test_stiff_ros3_order_and_accuracy(void) {
+    printf("Running test_stiff_ros3_order_and_accuracy (6-State Analytical Jacobian ROS3L)...\n");
+
+    CstrSeriesParallelParams p = cstr_series_parallel_default_parameters();
+    /* Fine RK4 reference over t = 0.25 min */
+    double r_ca = 0.50, r_cb = 0.25, r_cc = 0.20, r_cd = 0.05, r_t = 345.0, r_tj = 310.0;
+    for (int i = 0; i < 25000; i++) {
+        cstr_series_parallel_step_rk4(&p, &r_ca, &r_cb, &r_cc, &r_cd, &r_t, &r_tj, 0.25 / 25000.0);
+    }
+
+    double err_coarse = 0.0, err_fine = 0.0;
+    for (int mode = 0; mode < 2; mode++) {
+        int steps = (mode == 0) ? 10 : 20;
+        double dt = 0.25 / (double)steps;
+        double ca = 0.50, cb = 0.25, cc = 0.20, cd = 0.05, t = 345.0, tj = 310.0;
+        for (int i = 0; i < steps; i++) {
+            int rc = cstr_series_parallel_step_ros3(&p, &ca, &cb, &cc, &cd, &t, &tj, dt);
+            TEST_ASSERT(rc == 0, "ROS3L step succeeded");
+        }
+        double err = fabs(t - r_t) + fabs(ca - r_ca) * 100.0 + fabs(cb - r_cb) * 100.0;
+        if (mode == 0) err_coarse = err;
+        else err_fine = err;
+    }
+
+    printf("   [ROS3L Accuracy] dt=0.025 err=%.3e, dt=0.0125 err=%.3e, ratio=%.2fx\n",
+           err_coarse, err_fine, err_coarse / (err_fine + 1e-15));
+    TEST_ASSERT(err_fine < 5e-3, "ROS3L achieves <5e-3 combined metric error with dt=0.0125 min");
+    TEST_ASSERT(err_coarse / (err_fine + 1e-15) > 6.0, "ROS3L exhibits 3rd-order error reduction (>6x on 2x refinement)");
+}
+
+static void test_stiff_ros3_runaway_stability_vs_rk4(void) {
+    printf("Running test_stiff_ros3_runaway_stability_vs_rk4 (Severe Stiff Thermal Runaway at large dt)...\n");
+
+    CstrSeriesParallelParamsFFI p_ffi;
+    reactor_cstr_series_parallel_default_params(&p_ffi);
+    p_ffi.t_feed_kelvin = 350.0;
+    p_ffi.ua_j_per_min_k = 24000.0; /* Low cooling -> severe thermal runaway */
+    p_ffi.jacket_flow_l_per_min = 15.0;
+
+    /* With large dt = 0.08 min, explicit single-step RK4 overflows/diverges into stiffness blowup */
+    double rk_ca = 0.60, rk_cb = 0.25, rk_cc = 0.05, rk_cd = 0.02, rk_t = 370.0, rk_tj = 320.0;
+    for (int i = 0; i < 40; i++) {
+        reactor_cstr_series_parallel_step_rk4(&p_ffi, &rk_ca, &rk_cb, &rk_cc, &rk_cd, &rk_t, &rk_tj, 0.08);
+    }
+
+    /* L-stable adaptive ROS3L handles dt = 0.08 min cleanly without divergence */
+    double ros_ca = 0.60, ros_cb = 0.25, ros_cc = 0.05, ros_cd = 0.02, ros_t = 370.0, ros_tj = 320.0;
+    CstrSeriesParallelStateFFI st;
+    for (int i = 0; i < 40; i++) {
+        int rc = reactor_cstr_series_parallel_step_ros3_detailed(
+            &p_ffi, &ros_ca, &ros_cb, &ros_cc, &ros_cd, &ros_t, &ros_tj, 0.08, 1e-5, 1e-7, 400.0, &st);
+        TEST_ASSERT(rc == 0, "Adaptive ROS3L detailed FFI step succeeds across stiff runaway");
+    }
+
+    TEST_ASSERT(isfinite(ros_t) && ros_t > 400.0 && ros_t < 550.0,
+        "L-stable ROS3L remains bounded and physically realistic across thermal runaway");
+    TEST_ASSERT(ros_ca >= 0.0 && ros_cb >= 0.0 && ros_cc >= 0.0 && ros_cd >= 0.0,
+        "ROS3L preserves non-negative concentrations");
+    TEST_ASSERT(st.is_thermal_runaway, "ROS3L detailed state flags thermal runaway properly");
+
+    /* Also verify 2-state classical CSTR ROS3L FFI */
+    CstrParamsFFI c2;
+    reactor_cstr_default_params(&c2);
+    double ca2 = 0.85, t2 = 340.0;
+    TEST_ASSERT(reactor_cstr_step_ros3(&c2, &ca2, &t2, 0.1) == 0, "2-state reactor_cstr_step_ros3 succeeds");
+    TEST_ASSERT(isfinite(ca2) && isfinite(t2) && t2 > 340.0, "2-state ROS3L produces valid finite state");
+}
+
 int main(void) {
     printf("=========================================\n");
     printf("   ReactorCore.C Test Suite (C11)        \n");
@@ -752,6 +821,8 @@ int main(void) {
     test_series_parallel_batch_simd_parity();
     test_series_parallel_ffi_interface();
     test_series_parallel_batch_benchmark();
+    test_stiff_ros3_order_and_accuracy();
+    test_stiff_ros3_runaway_stability_vs_rk4();
 
     printf("=========================================\n");
     printf("Summary: %d passed, %d failed\n", g_tests_passed, g_tests_failed);
