@@ -1,13 +1,13 @@
 # ReactorCore.C — High-Performance Chemical Reactor Dynamics & ODE Solver
 
 [![C11](https://img.shields.io/badge/Language-C11%20(%60gcc%60)-00599C?logo=c)](https://en.wikipedia.org/wiki/C11_(C_standard_revision))
-[![Build & Tests](https://img.shields.io/badge/Tests-27%20Passed%20(100%25)-2ea44f)](#automated-testing)
+[![Build & Tests](https://img.shields.io/badge/Tests-723%20Passed%20(100%25)-2ea44f)](#automated-testing)
 [![Shared Library](https://img.shields.io/badge/Library-libreactorcore.so-orange.svg)](#native-shared-library--c-abi-ffi-export)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **ReactorCore.C** is a high-performance, modular numerical simulation engine built in **C11 (`gcc`)** with zero external library dependencies.
 
-It models the coupled, non-linear dynamic behavior of an **exothermic Continuous Stirred-Tank Reactor (CSTR)** equipped with cooling jacket heat exchange and non-linear Arrhenius kinetics, integrated using a classical **4th-Order Runge-Kutta (RK4)** numerical engine.
+It models coupled, non-linear chemical reactor dynamics — both the classic 2-state exothermic CSTR ($A \to B$) and the stiff 6-state Series-Parallel CSTR with cooling jacket ($A \to B \to C,\ A \to D$) — offering **Explicit RK4**, **SIMD AVX2/FMA batch execution**, **Adaptive RKF45**, and an **L-Stable 3rd-Order Rosenbrock (`ROS3L` / `ROS3L(2)`) stiff solver** with exact analytical Jacobians ($2\times 2$ and $6\times 6$).
 
 ![CSTR Dynamic Response Trajectory](docs/cstr_telemetry.svg)
 
@@ -19,21 +19,23 @@ Designed with rigorous low-level systems programming principles:
 
 ```text
 ReactorCore.C/
-├── Makefile                     # Strict GNU Makefile (-Wall -Wextra -Werror -pedantic -std=c11 -fPIC)
+├── Makefile                     # Strict GNU Makefile (-std=c11 -Wall -Wextra -Werror -pedantic -mavx2 -mfma -O3 -fPIC)
 ├── .github/workflows/c-ci.yml   # Automated continuous integration workflow (C11 test + shared lib)
 ├── include/
 │   ├── vector.h                 # Dynamic numerical vector structure and SAXPY primitives
-│   ├── rk4.h                    # Generic RK4 engine with workspace buffer pre-allocation
-│   ├── cstr.h                   # Coupled mass & energy non-linear balance equations
-│   └── reactor_ffi.h            # C-ABI Foreign Function Interface header for interop
+│   ├── rk4.h                    # Generic RK4 & RKF45 engines with workspace pre-allocation
+│   ├── cstr.h                   # Coupled 2-state & 6-state Series-Parallel CSTR models + AVX2 batch kernels
+│   ├── stiff_solver.h           # L-stable 3rd-order Rosenbrock (ROS3L / ROS3L(2)) stiff integrator
+│   └── reactor_ffi.h            # C-ABI Foreign Function Interface header for Python/.NET interop
 ├── src/
 │   ├── vector.c                 # Safe memory allocation, deep cloning, and buffer math
-│   ├── rk4.c                    # 4-stage Runge-Kutta integration implementation
-│   ├── cstr.c                   # Arrhenius rate law and differential equations (dCa/dt, dT/dt)
-│   ├── reactor_ffi.c            # Exported FFI implementations and trajectory batch solver
+│   ├── rk4.c                    # 4-stage RK4 & Dormand/RKF45 adaptive integration
+│   ├── cstr.c                   # Arrhenius rate laws, batch trajectories, and SIMD vectorized kernels
+│   ├── stiff_solver.c           # Exact 2x2 & 6x6 analytical Jacobians, LU pivoting, and ROS3L(2) adaptive steps
+│   ├── reactor_ffi.c            # Exported FFI implementations for Python (ctypes) and C# (P/Invoke)
 │   └── main.c                   # CLI application: runs simulation, logs telemetry, exports CSV
 ├── tests/
-│   └── test_solver.c            # Automated unit test suite & analytical order-of-accuracy checks
+│   └── test_solver.c            # 723 automated assertions (RK4, RKF45, SIMD batch, 6x6 ROS3L stiff stability)
 └── docs/
     └── cstr_telemetry.svg       # Generated simulation trajectory diagram
 ```
@@ -101,7 +103,7 @@ make run
 
 ## Automated Testing
 
-Validates dynamic vector operations, analytical decay order of accuracy ($O(\Delta t^4)$), harmonic oscillator energy conservation, CSTR thermal runaway thresholds, and the C-ABI FFI export interface:
+Validates dynamic vector operations, analytical decay order of accuracy ($O(\Delta t^4)$), harmonic oscillator energy conservation, CSTR steady states & runaway thresholds, SIMD AVX2/FMA batch integration, adaptive RKF45, and **L-stable `ROS3L`/`ROS3L(2)`** accuracy + stiff runaway boundedness (`dt = 0.08 min`):
 
 ```bash
 make test
@@ -115,13 +117,11 @@ Running Automated Unit Tests...
 =========================================
    ReactorCore.C Test Suite (C11)        
 =========================================
-Running test_vector_operations...
-Running test_rk4_analytical_decay (Order of Accuracy)...
-Running test_rk4_harmonic_oscillator_energy...
-Running test_cstr_steady_state_and_runaway...
-Running test_reactor_ffi_interface...
+...
+Running test_ros3_stiff_solver (2x2 & 6x6 Exact Jacobian)...
+[ROS3L Accuracy] dt=0.025 err=2.753e-02, dt=0.0125 err=4.378e-03, ratio=6.29x
 =========================================
-Summary: 27 passed, 0 failed
+Summary: 723 passed, 0 failed
 =========================================
 ```
 
